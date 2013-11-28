@@ -902,7 +902,7 @@ class WP_Import extends WP_Importer {
 			return new WP_Error( 'upload_dir_error', $upload['error'] );
 
 		// fetch the remote url and write it to the placeholder file
-		$headers = wp_get_http( $url, $upload['file'] );
+		$headers = wp_get_http_no_timeout( $url, $upload['file'] );
 
 		// request failed
 		if ( ! $headers ) {
@@ -1130,3 +1130,48 @@ function wordpress_importer_init() {
 	register_importer( 'wordpress', 'WordPress', __('Import <strong>posts, pages, comments, custom fields, categories, and tags</strong> from a WordPress export file.', 'wordpress-importer'), array( $GLOBALS['wp_import'], 'dispatch' ) );
 }
 add_action( 'admin_init', 'wordpress_importer_init' );
+
+
+
+function wp_get_http_no_timeout( $url, $file_path = false, $red = 1 ) {
+        @set_time_limit( 0 );
+
+        if ( $red > 5 )
+                return false;
+
+        $options = array();
+        $options['redirection'] = 5;
+
+        if ( false == $file_path )
+                $options['method'] = 'HEAD';
+        else
+                $options['method'] = 'GET';
+
+        $response = wp_safe_remote_request( $url, $options );
+
+        if ( is_wp_error( $response ) )
+                return false;
+
+        $headers = wp_remote_retrieve_headers( $response );
+        $headers['response'] = wp_remote_retrieve_response_code( $response );
+
+        // WP_HTTP no longer follows redirects for HEAD requests.
+        if ( 'HEAD' == $options['method'] && in_array($headers['response'], array(301, 302)) && isset( $headers['location'] ) ) {
+                return wp_get_http_no_timeout( $headers['location'], $file_path, ++$red );
+        }
+
+        if ( false == $file_path )
+                return $headers;
+
+        // GET request - write it to the supplied filename
+        $out_fp = fopen($file_path, 'w');
+        if ( !$out_fp )
+                return $headers;
+
+        fwrite( $out_fp,  wp_remote_retrieve_body( $response ) );
+        fclose($out_fp);
+        clearstatcache();
+
+        return $headers;
+}
+
