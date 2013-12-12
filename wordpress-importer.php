@@ -856,21 +856,21 @@ class WP_Import extends WP_Importer {
 		if ( preg_match( '|^/[\w\W]+$|', $url ) )
 			$url = rtrim( $this->base_url, '/' ) . $url;
 
-		$upload = $this->fetch_remote_file( $url, $post );
-		if ( is_wp_error( $upload ) )
+        $upload = $this->fetch_remote_file( $url, $post , true);
+        
+        if ( is_wp_error( $upload ) )
 			return $upload;
-
-		if ( $info = wp_check_filetype( $upload['file'] ) )
+        
+        if ( $info = wp_check_filetype( $upload['file'] ) )
 			$post['post_mime_type'] = $info['type'];
 		else
 			return new WP_Error( 'attachment_processing_error', __('Invalid file type', 'wordpress-importer') );
-
-		$post['guid'] = $upload['url'];
+        
+        $post['guid'] = $upload['url'];
 
 		// as per wp-admin/includes/upload.php
 		$post_id = wp_insert_attachment( $post, $upload['file'] );
 		wp_update_attachment_metadata( $post_id, wp_generate_attachment_metadata( $post_id, $upload['file'] ) );
-
 		// remap resized image URLs, works by stripping the extension and remapping the URL stub.
 		if ( preg_match( '!^image/!', $info['type'] ) ) {
 			$parts = pathinfo( $url );
@@ -892,17 +892,28 @@ class WP_Import extends WP_Importer {
 	 * @param array $post Attachment details
 	 * @return array|WP_Error Local file location details on success, WP_Error otherwise
 	 */
-	function fetch_remote_file( $url, $post ) {
+	function fetch_remote_file( $url, $post, $check_if_exists = false) {
 		// extract the file name and extension from the url
 		$file_name = basename( $url );
 
-		// get placeholder file in the upload dir with a unique, sanitized filename
-		$upload = wp_upload_bits( $file_name, 0, '', $post['upload_date'] );
-		if ( $upload['error'] )
+        if ($check_if_exists) {
+            $uploadDir = wp_upload_dir($post['upload_date']); 
+            $upload = array(
+                'file' => $uploadDir['path'] . '/' . $file_name,
+                'url' => $uploadDir['url'] . '/' . $file_name,
+                'error' => false             
+            );
+
+
+        } else {
+    		// get placeholder file in the upload dir with a unique, sanitized filename
+            $upload = wp_upload_bits( $file_name, 0, '', $post['upload_date'] );
+        }
+        if ( $upload['error'] )
 			return new WP_Error( 'upload_dir_error', $upload['error'] );
 
 		// fetch the remote url and write it to the placeholder file
-		$headers = wp_get_http_no_timeout( $url, $upload['file'] );
+		$headers = wp_get_http_no_timeout( $url, $upload['file'], 1, $check_if_exists);
 
 		// request failed
 		if ( ! $headers ) {
@@ -919,7 +930,7 @@ class WP_Import extends WP_Importer {
 		$filesize = filesize( $upload['file'] );
 
 		if ( isset( $headers['content-length'] ) && $filesize != $headers['content-length'] ) {
-			@unlink( $upload['file'] );
+			//@unlink( $upload['file'] );
 			return new WP_Error( 'import_file_error', __('Remote file is incorrect size', 'wordpress-importer') );
 		}
 
@@ -945,8 +956,7 @@ class WP_Import extends WP_Importer {
 	}
 
 	/**
-	 * Attempt to associate posts and menu items with previously missing parents
-	 *
+	 * Attempt to associate posts and menu items with previously missing parentfalse*
 	 * An imported post's parent may not have been imported when it was first created
 	 * so try again. Similarly for child menu items and menu items which were missing
 	 * the object (e.g. post) they represent in the menu
@@ -1133,14 +1143,23 @@ add_action( 'admin_init', 'wordpress_importer_init' );
 
 
 
-function wp_get_http_no_timeout( $url, $file_path = false, $red = 1 ) {
+function wp_get_http_no_timeout( $url, $file_path = false, $red = 1, $check_if_exists = false ) {
         @set_time_limit( 0 );
+
+        if ($check_if_exists) {
+            if (file_exists($file_path)) {
+                $headers['response'] = 200;
+                $headers['content-length'] = filesize($file_path);
+                return $headers;
+             }
+        }
 
         if ( $red > 5 )
                 return false;
 
         $options = array();
         $options['redirection'] = 5;
+        $options['timeout'] = 0;
 
         if ( false == $file_path )
                 $options['method'] = 'HEAD';
